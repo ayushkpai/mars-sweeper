@@ -13,7 +13,6 @@ import {
   bagCost,
   capacityOf,
   createInitialEconomy,
-  currentTool,
   droneCost,
   economyReducer,
   magnetCost,
@@ -41,7 +40,7 @@ const EMPTY_STATUS: WorldStatus = {
   coverage: 0,
   depotDistance: 24,
   inRange: false,
-  locked: false,
+  active: false,
   sweeping: false,
   drones: 0,
 };
@@ -62,8 +61,6 @@ export default function MarsGame() {
   const worldRef = useRef<World | null>(null);
   const [worldReady, setWorldReady] = useState(false);
   const [status, setStatus] = useState<WorldStatus>(EMPTY_STATUS);
-  const [locked, setLocked] = useState(false);
-  const pendingLock = useRef(false);
 
   const [shopOpen, setShopOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -94,7 +91,6 @@ export default function MarsGame() {
       if (cancelled || !containerRef.current) return;
 
       world = createWorld(containerRef.current, {
-        onLockChange: (nextLocked) => setLocked(nextLocked),
         onCleared: () => {
           const sector = SECTORS[ecoRef.current.sectorId];
           dispatch({ type: "clear", sectorId: sector.id });
@@ -114,11 +110,6 @@ export default function MarsGame() {
       });
       worldRef.current = world;
       setWorldReady(true);
-
-      if (pendingLock.current) {
-        pendingLock.current = false;
-        world.requestLock();
-      }
     });
 
     return () => {
@@ -172,17 +163,11 @@ export default function MarsGame() {
 
   const closeShop = useCallback(() => {
     setShopOpen(false);
-    worldRef.current?.requestLock();
   }, []);
 
   const openShop = useCallback(() => {
     setShopOpen(true);
     setHelpOpen(false);
-    document.exitPointerLock();
-  }, []);
-
-  const resume = useCallback(() => {
-    worldRef.current?.requestLock();
   }, []);
 
   useEffect(() => {
@@ -199,7 +184,6 @@ export default function MarsGame() {
         sellLoad();
       } else if (event.code === "KeyH") {
         setHelpOpen(true);
-        document.exitPointerLock();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -277,13 +261,10 @@ export default function MarsGame() {
 
   const startGame = () => {
     dispatch({ type: "dismiss-tutorial" });
-    if (worldRef.current) worldRef.current.requestLock();
-    else pendingLock.current = true;
   };
 
   const dismissHelp = () => {
     setHelpOpen(false);
-    worldRef.current?.requestLock();
   };
 
   const introOpen = !eco.tutorialSeen;
@@ -291,15 +272,11 @@ export default function MarsGame() {
     (sector) => (eco.clearCounts[sector.id] ?? 0) > 0,
   );
   const victoryOpen = allCleared && !victoryDismissed;
-  const showPause =
-    !locked &&
-    !introOpen &&
-    !shopOpen &&
-    !helpOpen &&
-    !resetOpen &&
-    !victoryOpen;
+  const modalOpen = introOpen || shopOpen || helpOpen || resetOpen || victoryOpen;
 
-  const tool = currentTool(eco);
+  useEffect(() => {
+    worldRef.current?.setInputEnabled(!modalOpen);
+  }, [modalOpen, worldReady]);
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#150a06] text-stone-100">
@@ -312,34 +289,11 @@ export default function MarsGame() {
         onOpenShop={openShop}
         onOpenHelp={() => {
           setHelpOpen(true);
-          document.exitPointerLock();
         }}
         onReset={() => {
           setResetOpen(true);
-          document.exitPointerLock();
         }}
       />
-
-      {showPause && (
-        <button
-          type="button"
-          onClick={resume}
-          className="absolute inset-0 z-10 flex cursor-pointer flex-col items-center justify-center gap-4 bg-black/40 text-center backdrop-blur-[1px]"
-        >
-          <span className="rounded-2xl border border-white/15 bg-[#160d09]/80 px-6 py-4 shadow-xl backdrop-blur">
-            <span className="block text-lg font-semibold text-stone-100">
-              Click to keep sweeping
-            </span>
-            <span className="mt-1 block text-xs text-stone-400">
-              Mouse look · WASD move · Hold LMB to sweep · E to sell
-            </span>
-          </span>
-          <span className="rounded-full border border-orange-300/30 bg-orange-500/15 px-4 py-1.5 text-[11px] text-orange-200">
-            {tool.emoji} {tool.name} · {Math.round(powerOf(eco))} dust/s ·{" "}
-            {tool.radius.toFixed(1)}m reach
-          </span>
-        </button>
-      )}
 
       {shopOpen && (
         <Shop
@@ -386,8 +340,9 @@ export default function MarsGame() {
           <li className="flex gap-3">
             <span aria-hidden="true">🖱️</span>
             <span>
-              <b className="text-stone-100">Mouse</b> looks around — click the
-              scene to lock your cursor.
+              <b className="text-stone-100">Drag the mouse</b> (or use the{" "}
+              <b className="text-stone-100">arrow keys</b>) to look around. No
+              cursor lock, no clicking to focus.
             </span>
           </li>
           <li className="flex gap-3">
@@ -400,8 +355,9 @@ export default function MarsGame() {
           <li className="flex gap-3">
             <span aria-hidden="true">🧹</span>
             <span>
-              <b className="text-stone-100">Hold left mouse</b> to sweep the
-              dust inside the aim ring.
+              <b className="text-stone-100">Hold left mouse</b> or{" "}
+              <b className="text-stone-100">Space</b> to sweep the dust inside
+              the aim ring.
             </span>
           </li>
           <li className="flex gap-3">
@@ -414,7 +370,8 @@ export default function MarsGame() {
           </li>
         </ul>
         <p className="mt-3 rounded-xl border border-white/10 bg-white/5 p-2 text-[11px] text-stone-400">
-          Best on desktop with a mouse and keyboard.
+          Desktop keyboard and mouse recommended. Everything works without
+          pointer lock.
         </p>
         <button
           type="button"
@@ -432,8 +389,10 @@ export default function MarsGame() {
         </h2>
         <div className="mt-3 space-y-2 text-sm leading-relaxed text-stone-300">
           <p>
-            Aim the ring at red dust and hold left mouse. Your cargo bay fills
-            up — when it is full, walk to the glowing depot beacon and press{" "}
+            Aim the ring at red dust and hold left mouse (or{" "}
+            <b className="text-stone-100">Space</b>) to sweep. Drag the mouse or
+            use the <b className="text-stone-100">arrow keys</b> to look. When
+            your cargo bay is full, walk to the glowing depot beacon and press{" "}
             <b className="text-stone-100">E</b>.
           </p>
           <p>
@@ -444,7 +403,7 @@ export default function MarsGame() {
           <p className="text-stone-400">
             Press <b className="text-stone-200">B</b> for the shop,{" "}
             <b className="text-stone-200">Shift</b> to sprint, and{" "}
-            <b className="text-stone-200">Esc</b> to release the mouse.
+            <b className="text-stone-200">H</b> for this manual.
           </p>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-[11px] text-stone-400">
@@ -452,10 +411,10 @@ export default function MarsGame() {
             👣 <b className="text-stone-200">WASD</b> — move
           </div>
           <div className="rounded-lg bg-white/5 p-2">
-            🖱️ <b className="text-stone-200">Mouse</b> — look
+            🖱️ <b className="text-stone-200">Drag</b> / arrows — look
           </div>
           <div className="rounded-lg bg-white/5 p-2">
-            🧹 <b className="text-stone-200">LMB</b> — sweep
+            🧹 <b className="text-stone-200">LMB / Space</b> — sweep
           </div>
           <div className="rounded-lg bg-white/5 p-2">
             💰 <b className="text-stone-200">E</b> — sell at depot
@@ -475,7 +434,6 @@ export default function MarsGame() {
         open={victoryOpen}
         onClose={() => {
           setVictoryDismissed(true);
-          worldRef.current?.requestLock();
         }}
         labelledBy="victory-title"
       >
@@ -509,7 +467,6 @@ export default function MarsGame() {
           type="button"
           onClick={() => {
             setVictoryDismissed(true);
-            worldRef.current?.requestLock();
           }}
           className="mt-5 w-full rounded-xl bg-gradient-to-r from-orange-500 to-amber-400 px-4 py-3 text-sm font-bold text-stone-950 transition hover:from-orange-400 hover:to-amber-300"
         >

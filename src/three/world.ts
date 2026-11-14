@@ -40,13 +40,12 @@ export interface WorldStatus {
   coverage: number;
   depotDistance: number;
   inRange: boolean;
-  locked: boolean;
+  active: boolean;
   sweeping: boolean;
   drones: number;
 }
 
 export interface WorldOptions {
-  onLockChange: (locked: boolean) => void;
   onCleared: () => void;
 }
 
@@ -55,7 +54,7 @@ export interface World {
   getStatus: () => WorldStatus;
   sell: () => number;
   resetSector: () => void;
-  requestLock: () => void;
+  setInputEnabled: (enabled: boolean) => void;
   dispose: () => void;
 }
 
@@ -93,7 +92,7 @@ export function createWorld(
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.domElement.style.cssText =
-    "display:block;width:100%;height:100%;touch-action:none";
+    "display:block;width:100%;height:100%;touch-action:none;cursor:grab;user-select:none";
   container.appendChild(renderer.domElement);
 
   const clock = new THREE.Clock();
@@ -493,10 +492,12 @@ export function createWorld(
   };
   let carried = 0;
   let capacity = config.capacity;
-  let locked = false;
+  let inputEnabled = true;
+  let dragging = false;
   let sweeping = false;
   let toolSwing = 0;
   const mouseSway = { x: 0, y: 0 };
+  const lastPointer = { x: 0, y: 0 };
   let particleTimer = 0;
   const keys = new Set<string>();
 
@@ -509,33 +510,47 @@ export function createWorld(
     player.vz = 0;
   }
 
-  function onPointerLockChange() {
-    locked = document.pointerLockElement === renderer.domElement;
-    if (!locked) sweeping = false;
-    options.onLockChange(locked);
-  }
-
-  function onMouseMove(event: MouseEvent) {
-    if (!locked) return;
-    player.yaw -= event.movementX * 0.0022;
-    player.pitch -= event.movementY * 0.0022;
+  function look(dx: number, dy: number, sensitivity: number) {
+    player.yaw -= dx * sensitivity;
+    player.pitch -= dy * sensitivity;
     player.pitch = THREE.MathUtils.clamp(player.pitch, -1.35, 1.15);
-    mouseSway.x = THREE.MathUtils.clamp(mouseSway.x + event.movementX * 0.001, -1, 1);
-    mouseSway.y = THREE.MathUtils.clamp(mouseSway.y + event.movementY * 0.001, -1, 1);
+    mouseSway.x = THREE.MathUtils.clamp(mouseSway.x + dx * 0.0015, -1, 1);
+    mouseSway.y = THREE.MathUtils.clamp(mouseSway.y + dy * 0.0015, -1, 1);
   }
 
-  function onMouseDown(event: MouseEvent) {
-    if (!locked || event.button !== 0) return;
-    sweeping = true;
+  function onPointerDown(event: PointerEvent) {
+    if (!inputEnabled || event.button !== 0) return;
+    dragging = true;
+    lastPointer.x = event.clientX;
+    lastPointer.y = event.clientY;
+    renderer.domElement.setPointerCapture?.(event.pointerId);
+    renderer.domElement.style.cursor = "grabbing";
   }
 
-  function onMouseUp() {
-    sweeping = false;
+  function onPointerMove(event: PointerEvent) {
+    if (!dragging) return;
+    const dx = event.clientX - lastPointer.x;
+    const dy = event.clientY - lastPointer.y;
+    lastPointer.x = event.clientX;
+    lastPointer.y = event.clientY;
+    look(dx, dy, 0.0045);
+  }
+
+  function onPointerUp(event: PointerEvent) {
+    dragging = false;
+    renderer.domElement.style.cursor = "grab";
+    if (renderer.domElement.hasPointerCapture?.(event.pointerId)) {
+      renderer.domElement.releasePointerCapture(event.pointerId);
+    }
   }
 
   function onKeyDown(event: KeyboardEvent) {
     const target = event.target as HTMLElement | null;
     if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+    if (!inputEnabled) return;
+    if (event.code === "Space" || event.code.startsWith("Arrow")) {
+      event.preventDefault();
+    }
     keys.add(event.code);
   }
 
@@ -543,19 +558,30 @@ export function createWorld(
     keys.delete(event.code);
   }
 
-  function onClick() {
-    if (!locked) {
-      void renderer.domElement.requestPointerLock();
-    }
+  function onBlur() {
+    keys.clear();
+    dragging = false;
+    renderer.domElement.style.cursor = "grab";
   }
 
-  document.addEventListener("pointerlockchange", onPointerLockChange);
-  document.addEventListener("mousemove", onMouseMove);
-  document.addEventListener("mousedown", onMouseDown);
-  document.addEventListener("mouseup", onMouseUp);
+  renderer.domElement.addEventListener("pointerdown", onPointerDown);
+  renderer.domElement.addEventListener("pointermove", onPointerMove);
+  renderer.domElement.addEventListener("pointerup", onPointerUp);
+  renderer.domElement.addEventListener("pointercancel", onPointerUp);
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
-  renderer.domElement.addEventListener("click", onClick);
+  window.addEventListener("blur", onBlur);
+
+  function setInputEnabled(enabled: boolean) {
+    inputEnabled = enabled;
+    if (!enabled) {
+      keys.clear();
+      dragging = false;
+      mouseSway.x = 0;
+      mouseSway.y = 0;
+      renderer.domElement.style.cursor = "grab";
+    }
+  }
 
   /* ---------------------------------------------------------------- */
   /* Aiming and sweeping                                               */
@@ -733,8 +759,18 @@ export function createWorld(
     const dt = Math.min(clock.getDelta(), 0.05);
     const time = clock.elapsedTime;
 
+    // Keyboard look (arrow keys) for mouse-free play.
+    if (inputEnabled) {
+      const turn = 2.0 * dt;
+      if (keys.has("ArrowLeft")) player.yaw += turn;
+      if (keys.has("ArrowRight")) player.yaw -= turn;
+      if (keys.has("ArrowUp")) player.pitch += turn * 0.75;
+      if (keys.has("ArrowDown")) player.pitch -= turn * 0.75;
+      player.pitch = THREE.MathUtils.clamp(player.pitch, -1.35, 1.15);
+    }
+
     // Movement.
-    const canMove = locked;
+    const canMove = inputEnabled;
     const forwardInput = canMove
       ? (keys.has("KeyW") ? 1 : 0) - (keys.has("KeyS") ? 1 : 0)
       : 0;
@@ -776,14 +812,15 @@ export function createWorld(
 
     // Sweeping.
     const cursor = computeAimPoint();
-    sweepRing.visible = locked;
+    sweeping = inputEnabled && (dragging || keys.has("Space"));
+    sweepRing.visible = inputEnabled;
     sweepRing.position.copy(cursor);
     sweepRing.scale.setScalar(TOOLS[config.toolIndex].radius);
     ringMaterial.opacity = sweeping
       ? 0.55 + Math.sin(time * 14) * 0.18
       : 0.22;
 
-    if (locked && sweeping) {
+    if (sweeping) {
       const budget = Math.min(
         config.power * 1.25 * dt,
         Math.max(0, capacity - carried),
@@ -901,7 +938,7 @@ export function createWorld(
           : 0,
       depotDistance,
       inRange: depotDistance <= DEPOT_RANGE,
-      locked,
+      active: inputEnabled,
       sweeping,
       drones: config.droneCount,
     };
@@ -911,12 +948,6 @@ export function createWorld(
     const amount = Math.floor(carried);
     carried = Math.max(0, carried - amount);
     return amount;
-  }
-
-  function requestLock() {
-    if (document.pointerLockElement !== renderer.domElement) {
-      void renderer.domElement.requestPointerLock();
-    }
   }
 
   function resetSector() {
@@ -929,13 +960,13 @@ export function createWorld(
     disposed = true;
     renderer.setAnimationLoop(null);
     if (refillTimer !== null) window.clearTimeout(refillTimer);
-    document.removeEventListener("pointerlockchange", onPointerLockChange);
-    document.removeEventListener("mousemove", onMouseMove);
-    document.removeEventListener("mousedown", onMouseDown);
-    document.removeEventListener("mouseup", onMouseUp);
+    renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+    renderer.domElement.removeEventListener("pointermove", onPointerMove);
+    renderer.domElement.removeEventListener("pointerup", onPointerUp);
+    renderer.domElement.removeEventListener("pointercancel", onPointerUp);
     window.removeEventListener("keydown", onKeyDown);
     window.removeEventListener("keyup", onKeyUp);
-    renderer.domElement.removeEventListener("click", onClick);
+    window.removeEventListener("blur", onBlur);
     resizeObserver.disconnect();
     scene.traverse((object) => {
       if (object instanceof THREE.Mesh || object instanceof THREE.Points) {
@@ -949,5 +980,5 @@ export function createWorld(
     renderer.domElement.remove();
   }
 
-  return { configure, getStatus, sell, resetSector, requestLock, dispose };
+  return { configure, getStatus, sell, resetSector, setInputEnabled, dispose };
 }

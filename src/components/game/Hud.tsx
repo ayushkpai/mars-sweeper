@@ -148,7 +148,7 @@ export default function Hud({
       </div>
 
       {/* Crosshair */}
-      {status.locked && (
+      {status.active && (
         <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
           <div
             className={[
@@ -228,11 +228,11 @@ export default function Hud({
           </span>
           <span className="text-stone-700">·</span>
           <span>
-            <b className="text-stone-300">Mouse</b> look
+            <b className="text-stone-300">Drag</b> or arrows to look
           </span>
           <span className="text-stone-700">·</span>
           <span>
-            <b className="text-stone-300">Hold LMB</b> sweep
+            <b className="text-stone-300">Hold LMB / Space</b> sweep
           </span>
           <span className="text-stone-700">·</span>
           <span>
