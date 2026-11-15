@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { SECTOR_LIST, SECTORS, TOOLS } from "@/game/content";
+import { DRONE_CAPSULE, DRONE_RATE, SECTOR_LIST, SECTORS, TOOLS } from "@/game/content";
 import type { SectorId } from "@/game/content";
 import {
   bagCost,
@@ -368,17 +368,26 @@ export default function Shop({
                       <span className="text-stone-400">×{eco.droneCount}</span>
                     </h3>
                     <p className="mt-1 text-xs leading-relaxed text-stone-400">
-                      Autonomous sweepers that fly to dust patches and clean
-                      them for you. No cargo space needed — they just make Mars
-                      shinier.
+                      Autonomous sweepers that fill a capsule with dust and
+                      launch it at the violet drone depot. Credits land the
+                      moment the capsule touches down — no cargo space or depot
+                      trip needed.
                     </p>
                   </div>
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <Stat label="Per drone" value="4.5 dust/s" />
+                  <Stat label="Per drone" value={`${DRONE_RATE} dust/s`} />
                   <Stat
-                    label="Fleet rate"
-                    value={`${(eco.droneCount * 4.5).toFixed(0)} dust/s`}
+                    label="Capsule"
+                    value={`${DRONE_CAPSULE} dust`}
+                  />
+                  <Stat
+                    label="Fleet sweep"
+                    value={`${(eco.droneCount * DRONE_RATE).toFixed(0)} dust/s`}
+                  />
+                  <Stat
+                    label="Auto-sell"
+                    value={`${money(eco.droneCount * DRONE_RATE * pricePerDust(eco))}/s`}
                   />
                 </div>
                 <BuyButton
@@ -394,9 +403,15 @@ export default function Shop({
                 <p className="text-sm font-semibold">Automation tips</p>
                 <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-relaxed text-stone-400">
                   <li>Drones keep cleaning while you haul loads to the depot.</li>
+                  <li>Capsules only pay out when they land at the drone depot.</li>
                   <li>They help finish a sector, which pays a storm bonus.</li>
-                  <li>Upgrading your dust magnet makes them faster too.</li>
                 </ul>
+                {eco.droneEarned > 0 && (
+                  <p className="mt-3 rounded-xl border border-violet-400/20 bg-violet-400/5 px-3 py-2 text-xs text-violet-200">
+                    Drone earnings so far:{" "}
+                    <b className="text-violet-100">{money(eco.droneEarned)}</b>
+                  </p>
+                )}
               </Card>
             </>
           )}

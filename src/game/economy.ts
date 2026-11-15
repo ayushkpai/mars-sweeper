@@ -19,11 +19,13 @@ export interface EconomyState {
   clearCounts: Partial<Record<SectorId, number>>;
   totalEarned: number;
   totalSwept: number;
+  droneEarned: number;
   tutorialSeen: boolean;
 }
 
 export type EconomyAction =
   | { type: "sell"; amount: number }
+  | { type: "drone-delivery"; dust: number }
   | { type: "clear"; sectorId: SectorId }
   | { type: "buy-tool" }
   | { type: "buy-bag" }
@@ -48,6 +50,7 @@ export function createInitialEconomy(): EconomyState {
     clearCounts: {},
     totalEarned: 0,
     totalSwept: 0,
+    droneEarned: 0,
     tutorialSeen: false,
   };
 }
@@ -105,6 +108,17 @@ export function economyReducer(
         credits: state.credits + value,
         totalEarned: state.totalEarned + value,
         totalSwept: state.totalSwept + action.amount,
+      };
+    }
+    case "drone-delivery": {
+      if (action.dust <= 0) return state;
+      const value = Math.floor(action.dust * pricePerDust(state));
+      return {
+        ...state,
+        credits: state.credits + value,
+        totalEarned: state.totalEarned + value,
+        totalSwept: state.totalSwept + action.dust,
+        droneEarned: state.droneEarned + value,
       };
     }
     case "clear": {

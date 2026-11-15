@@ -2,6 +2,9 @@ import * as THREE from "three";
 import {
   DEPOT_POSITION,
   DEPOT_RANGE,
+  DRONE_CAPSULE,
+  DRONE_DEPOT_POSITION,
+  DRONE_RATE,
   SECTORS,
   TOOLS,
 } from "@/game/content";
@@ -22,7 +25,8 @@ const PARTICLE_COUNT = 260;
 const EYE_HEIGHT = 1.68;
 const DEPOT_X = DEPOT_POSITION.x;
 const DEPOT_Z = DEPOT_POSITION.z;
-const DRONE_SWEEP_RATE = 4.5;
+const DRONE_PAD_X = DRONE_DEPOT_POSITION.x;
+const DRONE_PAD_Z = DRONE_DEPOT_POSITION.z;
 
 export interface WorldConfig {
   sector: SectorDef;
@@ -30,6 +34,7 @@ export interface WorldConfig {
   power: number;
   capacity: number;
   droneCount: number;
+  price: number;
 }
 
 export interface WorldStatus {
@@ -43,10 +48,12 @@ export interface WorldStatus {
   active: boolean;
   sweeping: boolean;
   drones: number;
+  capsules: number;
 }
 
 export interface WorldOptions {
   onCleared: () => void;
+  onDroneDelivery: (dust: number) => void;
 }
 
 export interface World {
@@ -68,10 +75,29 @@ interface Patch {
   rot: number;
 }
 
+interface CapsuleFlight {
+  capsule: THREE.Group;
+  from: THREE.Vector3;
+  control: THREE.Vector3;
+  to: THREE.Vector3;
+  t: number;
+  duration: number;
+  dust: number;
+}
+
 interface DroneVisual {
   group: THREE.Group;
+  capsule: THREE.Group;
   target: number;
   phase: number;
+  cargo: number;
+  capacity: number;
+  flight: CapsuleFlight | null;
+}
+
+interface CreditPopup {
+  sprite: THREE.Sprite;
+  life: number;
 }
 
 export function createWorld(
@@ -99,6 +125,7 @@ export function createWorld(
   const dummy = new THREE.Object3D();
   const aimPoint = new THREE.Vector3();
   const forward = new THREE.Vector3();
+  const scratch = new THREE.Vector3();
 
   let config: WorldConfig = {
     sector: SECTORS.landing,
@@ -106,6 +133,7 @@ export function createWorld(
     power: TOOLS[0].power,
     capacity: 80,
     droneCount: 0,
+    price: 2.5,
   };
   let currentSectorId = config.sector.id;
 
@@ -251,6 +279,176 @@ export function createWorld(
   depot.add(label);
 
   scene.add(depot);
+
+  /* ---------------------------------------------------------------- */
+  /* Drone depot                                                       */
+  /* ---------------------------------------------------------------- */
+
+  const dronePadY = heightAt(DRONE_PAD_X, DRONE_PAD_Z);
+  const droneDepot = new THREE.Group();
+  droneDepot.name = "drone-depot";
+  droneDepot.position.set(DRONE_PAD_X, dronePadY, DRONE_PAD_Z);
+  droneDepot.scale.setScalar(0.001);
+  droneDepot.visible = false;
+
+  const dronePad = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.1, 3.35, 0.28, 36),
+    new THREE.MeshStandardMaterial({
+      color: "#2f2838",
+      roughness: 0.5,
+      metalness: 0.65,
+    }),
+  );
+  dronePad.position.y = 0.14;
+  droneDepot.add(dronePad);
+
+  const droneRingMaterial = new THREE.MeshBasicMaterial({
+    color: "#c084fc",
+    transparent: true,
+    opacity: 0.85,
+  });
+  const droneRing = new THREE.Mesh(
+    new THREE.TorusGeometry(2.5, 0.075, 8, 56),
+    droneRingMaterial,
+  );
+  droneRing.rotation.x = -Math.PI / 2;
+  droneRing.position.y = 0.3;
+  droneDepot.add(droneRing);
+
+  const droneStrutMaterial = new THREE.MeshStandardMaterial({
+    color: "#4c3a5c",
+    roughness: 0.55,
+    metalness: 0.55,
+  });
+  for (let i = 0; i < 4; i++) {
+    const angle = (i / 4) * Math.PI * 2 + Math.PI / 4;
+    const strut = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.07, 0.11, 1.9, 8),
+      droneStrutMaterial,
+    );
+    strut.position.set(Math.cos(angle) * 2.1, 0.95, Math.sin(angle) * 2.1);
+    droneDepot.add(strut);
+    const lamp = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11, 10, 10),
+      new THREE.MeshBasicMaterial({ color: "#e9d5ff" }),
+    );
+    lamp.position.set(Math.cos(angle) * 2.1, 1.95, Math.sin(angle) * 2.1);
+    droneDepot.add(lamp);
+  }
+
+  const droneBeamMaterial = new THREE.MeshBasicMaterial({
+    color: "#c084fc",
+    transparent: true,
+    opacity: 0.22,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const droneBeam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.07, 0.16, 6, 10, 1, true),
+    droneBeamMaterial,
+  );
+  droneBeam.position.y = 3.1;
+  droneDepot.add(droneBeam);
+
+  const droneBeacon = new THREE.PointLight("#c084fc", 30, 20, 1.8);
+  droneBeacon.position.set(0, 2.2, 0);
+  droneDepot.add(droneBeacon);
+
+  const droneLabelCanvas = document.createElement("canvas");
+  droneLabelCanvas.width = 512;
+  droneLabelCanvas.height = 160;
+  const droneLabelCtx = droneLabelCanvas.getContext("2d");
+  if (droneLabelCtx) {
+    droneLabelCtx.fillStyle = "rgba(20, 8, 26, 0.75)";
+    droneLabelCtx.roundRect(6, 10, 500, 140, 24);
+    droneLabelCtx.fill();
+    droneLabelCtx.textAlign = "center";
+    droneLabelCtx.fillStyle = "#e9d5ff";
+    droneLabelCtx.font = "bold 46px system-ui, sans-serif";
+    droneLabelCtx.textBaseline = "middle";
+    droneLabelCtx.fillText("DRONE DEPOT", 256, 62);
+    droneLabelCtx.fillStyle = "#c4b5fd";
+    droneLabelCtx.font = "500 26px system-ui, sans-serif";
+    droneLabelCtx.fillText("capsules auto-sell on landing", 256, 112);
+  }
+  const droneLabelTexture = new THREE.CanvasTexture(droneLabelCanvas);
+  droneLabelTexture.colorSpace = THREE.SRGBColorSpace;
+  const droneLabel = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: droneLabelTexture,
+      transparent: true,
+      depthWrite: false,
+    }),
+  );
+  droneLabel.scale.set(9, 2.8, 1);
+  droneLabel.position.set(0, 6.2, 0);
+  droneDepot.add(droneLabel);
+
+  scene.add(droneDepot);
+
+  let padPulse = 0;
+
+  /* ---------------------------------------------------------------- */
+  /* Capsules                                                          */
+  /* ---------------------------------------------------------------- */
+
+  const capsuleMaterial = new THREE.MeshStandardMaterial({
+    color: "#ddd6fe",
+    emissive: "#8b5cf6",
+    emissiveIntensity: 1.3,
+    roughness: 0.3,
+    metalness: 0.5,
+  });
+  const capsuleBandMaterial = new THREE.MeshBasicMaterial({
+    color: "#f5f3ff",
+  });
+
+  function buildCapsule(): THREE.Group {
+    const capsule = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.SphereGeometry(0.26, 12, 10),
+      capsuleMaterial,
+    );
+    body.scale.set(1, 1.5, 1);
+    capsule.add(body);
+    const band = new THREE.Mesh(
+      new THREE.TorusGeometry(0.29, 0.028, 6, 20),
+      capsuleBandMaterial,
+    );
+    band.rotation.x = Math.PI / 2;
+    capsule.add(band);
+    return capsule;
+  }
+
+  const creditPopups: CreditPopup[] = [];
+
+  function spawnCreditPopup(value: number) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 128;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 58px system-ui, sans-serif";
+    ctx.shadowColor = "#a855f7";
+    ctx.shadowBlur = 20;
+    ctx.fillStyle = "#f3e8ff";
+    ctx.fillText(`+$${value.toLocaleString("en-US")}`, 128, 64);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    sprite.scale.set(4, 2, 1);
+    sprite.position.set(DRONE_PAD_X, dronePadY + 2.4, DRONE_PAD_Z);
+    scene.add(sprite);
+    creditPopups.push({ sprite, life: 1.6 });
+  }
 
   /* ---------------------------------------------------------------- */
   /* Dust                                                              */
@@ -438,7 +636,7 @@ export function createWorld(
   /* Drones                                                            */
   /* ---------------------------------------------------------------- */
 
-  let droneVisuals: DroneVisual[] = [];
+  const droneVisuals: DroneVisual[] = [];
   const droneTemplate = new THREE.Group();
   {
     const body = new THREE.Mesh(
@@ -461,10 +659,20 @@ export function createWorld(
   }
 
   function syncDrones() {
-    for (const drone of droneVisuals) scene.remove(drone.group);
-    droneVisuals = [];
     const visualCount = Math.min(config.droneCount, 8);
-    for (let i = 0; i < visualCount; i++) {
+    const share = visualCount > 0 ? config.droneCount / visualCount : 1;
+    const capacity = Math.max(DRONE_CAPSULE, Math.round(DRONE_CAPSULE * share));
+
+    while (droneVisuals.length > visualCount) {
+      const drone = droneVisuals.pop();
+      if (!drone) break;
+      if (drone.flight) scene.remove(drone.flight.capsule);
+      scene.remove(drone.group);
+    }
+
+    for (const drone of droneVisuals) drone.capacity = capacity;
+
+    for (let i = droneVisuals.length; i < visualCount; i++) {
       const group = droneTemplate.clone();
       group.position.set(
         Math.cos(i * 1.7) * 9,
@@ -472,7 +680,19 @@ export function createWorld(
         Math.sin(i * 1.7) * 9,
       );
       scene.add(group);
-      droneVisuals.push({ group, target: -1, phase: Math.random() * 10 });
+      const capsule = buildCapsule();
+      capsule.position.set(0, -0.42, 0);
+      capsule.visible = false;
+      group.add(capsule);
+      droneVisuals.push({
+        group,
+        capsule,
+        target: -1,
+        phase: Math.random() * 10,
+        cargo: 0,
+        capacity,
+        flight: null,
+      });
     }
   }
 
@@ -666,13 +886,133 @@ export function createWorld(
     }
   }
 
+  function launchCapsule(drone: DroneVisual) {
+    const capsule = drone.capsule;
+    drone.group.getWorldPosition(scratch);
+    const from = scratch.clone();
+    const to = new THREE.Vector3(DRONE_PAD_X, dronePadY + 0.55, DRONE_PAD_Z);
+    const distance = Math.hypot(to.x - from.x, to.z - from.z);
+    const control = from.clone().lerp(to, 0.5);
+    control.y = Math.max(from.y, to.y) + 5 + distance * 0.18;
+
+    drone.group.remove(capsule);
+    scene.add(capsule);
+    capsule.position.copy(from);
+    capsule.visible = true;
+    capsule.scale.setScalar(1);
+
+    drone.flight = {
+      capsule,
+      from,
+      control,
+      to,
+      t: 0,
+      duration: THREE.MathUtils.clamp(distance / 8 + 1.2, 1.9, 4.2),
+      dust: drone.cargo,
+    };
+    drone.cargo = 0;
+  }
+
+  function updateCapsules(dt: number) {
+    for (const drone of droneVisuals) {
+      const flight = drone.flight;
+      if (!flight) {
+        const load = drone.cargo / Math.max(1, drone.capacity);
+        drone.capsule.visible = drone.cargo > 0.05;
+        drone.capsule.scale.setScalar(0.55 + Math.min(1, load) * 0.45);
+        continue;
+      }
+
+      flight.t = Math.min(1, flight.t + dt / flight.duration);
+      const t = flight.t;
+      const inv = 1 - t;
+      const capsule = flight.capsule;
+      capsule.position.set(
+        inv * inv * flight.from.x +
+          2 * inv * t * flight.control.x +
+          t * t * flight.to.x,
+        inv * inv * flight.from.y +
+          2 * inv * t * flight.control.y +
+          t * t * flight.to.y,
+        inv * inv * flight.from.z +
+          2 * inv * t * flight.control.z +
+          t * t * flight.to.z,
+      );
+      capsule.rotation.y += dt * 3.4;
+      capsule.rotation.z += dt * 2.1;
+
+      if (t >= 1) {
+        scene.remove(capsule);
+        capsule.visible = false;
+        capsule.rotation.set(0, 0, 0);
+        capsule.scale.setScalar(0.55);
+        drone.group.add(capsule);
+        capsule.position.set(0, -0.42, 0);
+
+        padPulse = 1;
+        const value = Math.round(flight.dust * config.price);
+        if (value >= 1) spawnCreditPopup(value);
+        options.onDroneDelivery(flight.dust);
+        drone.flight = null;
+      }
+    }
+  }
+
+  function updateDroneDepot(dt: number, time: number) {
+    const wanted = config.droneCount > 0;
+    if (wanted) droneDepot.visible = true;
+    if (droneDepot.visible) {
+      const nextScale = THREE.MathUtils.damp(
+        droneDepot.scale.x,
+        wanted ? 1 : 0,
+        5,
+        dt,
+      );
+      droneDepot.scale.setScalar(Math.max(0.001, nextScale));
+      if (!wanted && nextScale < 0.01) droneDepot.visible = false;
+    }
+
+    padPulse = Math.max(0, padPulse - dt * 1.1);
+    droneRing.rotation.z += dt * (0.5 + padPulse * 2.4);
+    droneRing.scale.setScalar(1 + padPulse * 0.16);
+    droneRingMaterial.opacity =
+      0.55 + Math.sin(time * 2.6) * 0.2 + padPulse * 0.25;
+    droneBeacon.intensity = 18 + Math.sin(time * 3.1) * 6 + padPulse * 40;
+    droneBeamMaterial.opacity =
+      0.16 + Math.sin(time * 1.9) * 0.05 + padPulse * 0.16;
+  }
+
+  function updateCreditPopups(dt: number) {
+    for (let i = creditPopups.length - 1; i >= 0; i--) {
+      const popup = creditPopups[i];
+      popup.life -= dt;
+      popup.sprite.position.y += dt * 0.9;
+      const material = popup.sprite.material as THREE.SpriteMaterial;
+      material.opacity = Math.min(1, popup.life / 0.7);
+      if (popup.life <= 0) {
+        scene.remove(popup.sprite);
+        material.map?.dispose();
+        material.dispose();
+        creditPopups.splice(i, 1);
+      }
+    }
+  }
+
   function updateDrones(dt: number, time: number) {
-    if (droneVisuals.length === 0 || patches.length === 0) return;
+    if (droneVisuals.length === 0 || patches.length === 0) {
+      updateCapsules(dt);
+      return;
+    }
     const share = config.droneCount / droneVisuals.length;
     let removedTotal = 0;
 
     for (const drone of droneVisuals) {
       drone.phase += dt;
+      if (drone.flight) {
+        drone.group.position.y += Math.sin(time * 2 + drone.phase) * 0.001;
+        continue;
+      }
+
       let target: Patch | undefined = patches[drone.target];
       if (!target || target.dust <= 0.02) {
         let best: Patch | null = null;
@@ -711,13 +1051,16 @@ export function createWorld(
         drone.group.rotation.y += dt * 1.8;
 
         if (distance < 1.8) {
+          const room = drone.capacity - drone.cargo;
           const take = Math.min(
             target.dust,
-            share * DRONE_SWEEP_RATE * dt,
+            share * DRONE_RATE * dt,
+            room,
             Math.max(0, remainingDust),
           );
           if (take > 0) {
             target.dust -= take;
+            drone.cargo += take;
             removedTotal += take;
             updatePatchMatrix(patches.indexOf(target));
           }
@@ -725,7 +1068,11 @@ export function createWorld(
       } else {
         drone.group.position.y += Math.sin(time * 2 + drone.phase) * 0.002;
       }
+
+      if (drone.cargo >= drone.capacity - 0.001) launchCapsule(drone);
     }
+
+    updateCapsules(dt);
 
     if (removedTotal > 0) {
       remainingDust = Math.max(0, remainingDust - removedTotal);
@@ -885,6 +1232,8 @@ export function createWorld(
     );
 
     updateDrones(dt, time);
+    updateDroneDepot(dt, time);
+    updateCreditPopups(dt);
     ring.rotation.z += dt * 0.4;
     beacon.intensity = 45 + Math.sin(time * 3) * 12;
 
@@ -941,6 +1290,10 @@ export function createWorld(
       active: inputEnabled,
       sweeping,
       drones: config.droneCount,
+      capsules: droneVisuals.reduce(
+        (count, drone) => count + (drone.flight ? 1 : 0),
+        0,
+      ),
     };
   }
 
@@ -974,6 +1327,9 @@ export function createWorld(
         const material = object.material;
         if (Array.isArray(material)) material.forEach((m) => m.dispose());
         else material.dispose();
+      } else if (object instanceof THREE.Sprite) {
+        object.material.map?.dispose();
+        object.material.dispose();
       }
     });
     renderer.dispose();

@@ -181,3 +181,8 @@ export const SECTOR_LIST: readonly SectorDef[] = [
 
 export const DEPOT_POSITION = { x: 0, z: -14 };
 export const DEPOT_RANGE = 5.5;
+export const DRONE_DEPOT_POSITION = { x: 17, z: 3 };
+/** Dust a single drone can carry before launching a capsule. */
+export const DRONE_CAPSULE = 28;
+/** Dust units per second swept by a single drone. */
+export const DRONE_RATE = 4.5;

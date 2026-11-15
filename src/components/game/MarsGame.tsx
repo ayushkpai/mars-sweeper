@@ -43,6 +43,7 @@ const EMPTY_STATUS: WorldStatus = {
   active: false,
   sweeping: false,
   drones: 0,
+  capsules: 0,
 };
 
 export default function MarsGame() {
@@ -98,6 +99,9 @@ export default function MarsGame() {
           if (bannerTimer.current) window.clearTimeout(bannerTimer.current);
           bannerTimer.current = window.setTimeout(() => setBanner(null), 3400);
         },
+        onDroneDelivery: (dust) => {
+          dispatch({ type: "drone-delivery", dust });
+        },
       });
 
       const state = ecoRef.current;
@@ -107,6 +111,7 @@ export default function MarsGame() {
         power: powerOf(state),
         capacity: capacityOf(state),
         droneCount: state.droneCount,
+        price: pricePerDust(state),
       });
       worldRef.current = world;
       setWorldReady(true);
@@ -128,6 +133,7 @@ export default function MarsGame() {
       power: powerOf(eco),
       capacity: capacityOf(eco),
       droneCount: eco.droneCount,
+      price: pricePerDust(eco),
     });
   }, [worldReady, eco]);
 
@@ -231,7 +237,11 @@ export default function MarsGame() {
     const cost = droneCost(state);
     if (state.credits < cost) return notify(`Need ${money(cost)} to deploy a drone.`);
     dispatch({ type: "buy-drone" });
-    notify(`Sweeper drone #${state.droneCount + 1} is online.`);
+    if (state.droneCount === 0) {
+      notify("Drone depot online — capsules auto-sell when they land.");
+    } else {
+      notify(`Sweeper drone #${state.droneCount + 1} is online.`);
+    }
   };
 
   const unlockSector = (id: SectorId) => {
@@ -397,8 +407,10 @@ export default function MarsGame() {
           </p>
           <p>
             Credits buy bigger tools, cargo bays, dust magnets, market
-            contracts, and autonomous sweeper drones. Clear every patch in a
-            sector to trigger a storm bonus.
+            contracts, and autonomous sweeper drones. Drones fill capsules and
+            fire them at their own violet depot — the credits land when a
+            capsule touches down. Clear every patch in a sector to trigger a
+            storm bonus.
           </p>
           <p className="text-stone-400">
             Press <b className="text-stone-200">B</b> for the shop,{" "}

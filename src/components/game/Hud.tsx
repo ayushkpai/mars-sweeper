@@ -141,8 +141,15 @@ export default function Hud({
           </div>
 
           <div className="hidden rounded-xl border border-white/10 bg-[#140b07]/70 px-3 py-1.5 text-[10px] text-stone-400 backdrop-blur sm:block">
-            🛸 {status.drones} drone{status.drones === 1 ? "" : "s"} · Bag{" "}
-            {formatDust(capacityOf(eco))}
+            🛸 {status.drones} drone{status.drones === 1 ? "" : "s"}
+            {status.drones > 0 && status.capsules > 0 && (
+              <span className="text-violet-300">
+                {" "}
+                · {status.capsules} capsule
+                {status.capsules === 1 ? "" : "s"} inbound
+              </span>
+            )}
+            {" "}· Bag {formatDust(capacityOf(eco))}
           </div>
         </div>
       </div>
